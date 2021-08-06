@@ -165,11 +165,14 @@ public class Updater {
 		    {
 		        for (File child : listOfFiles )
 		        {
-		            child.renameTo(new File(destinationFolder + "\\" + child.getName()));
-		        	int percentage = (currentIndex * 100) / length;
-		        	currentIndex++;
-		        	UpdaterApplication.message.setText("Moving " + child.getName() + " @ " + percentage + "%");
-		        	UpdaterApplication.progress.setValue(percentage);
+		        	// We can not overwrite the updater as it is currently in use
+		        	if(!child.getName().toLowerCase().matches("updater.jar")) {
+			            child.renameTo(new File(destinationFolder + "\\" + child.getName()));
+			        	int percentage = (currentIndex * 100) / length;
+			        	currentIndex++;
+			        	UpdaterApplication.message.setText("Moving " + child.getName() + " @ " + percentage + "%");
+			        	UpdaterApplication.progress.setValue(percentage);
+		        	}
 		        }
 
 		        sourceFolder.delete();
