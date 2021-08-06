@@ -61,6 +61,7 @@ public class UpdaterApplication extends JPanel {
 		
 		frame.setVisible(true);
 
+		/*
 		File f = new File(VERSION_FILE);
 		try {
 			if(!f.exists()) {
@@ -68,7 +69,8 @@ public class UpdaterApplication extends JPanel {
 			}
 		} catch (Exception e) {
 			e.printStackTrace();
-		}	
+		}
+		*/	
 		
 		String file = "pokemon-wilds-windows64";
 		String os = getPlatform();
@@ -98,6 +100,7 @@ public class UpdaterApplication extends JPanel {
 		area.setLocation(x, y);
 		area.setSize(width, height);
 		area.setLineWrap(true);
+		area.setEditable(false);
 		return area;
 	}
 	
