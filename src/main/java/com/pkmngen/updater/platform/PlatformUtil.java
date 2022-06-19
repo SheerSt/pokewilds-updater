@@ -6,15 +6,15 @@ public final class PlatformUtil {
     public static Platform getPlatform() {
         var os = System.getProperty("os.name").toLowerCase(Locale.getDefault());
 
-        if(os.contains("win")) {
+        if (os.contains("win")) {
             return Platform.WINDOWS;
         }
 
-        if(os.contains("mac") || os.contains("darwin")) {
+        if (os.contains("mac") || os.contains("darwin")) {
             return Platform.MAC;
         }
 
-        if(os.contains("nux") || os.contains("nix") || os.contains("aix")) {
+        if (os.contains("nux") || os.contains("nix") || os.contains("aix")) {
             return Platform.LINUX;
         }
 

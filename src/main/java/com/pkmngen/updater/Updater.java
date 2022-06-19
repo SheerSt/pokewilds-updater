@@ -1,66 +1,50 @@
 package com.pkmngen.updater;
 
+import com.pkmngen.updater.platform.PlatformUtil;
 import java.io.BufferedOutputStream;
-import java.io.BufferedWriter;
 import java.io.File;
 import java.io.FileInputStream;
-import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.OutputStreamWriter;
-import java.net.MalformedURLException;
-import java.net.URL;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.concurrent.CompletableFuture;
+import java.util.function.Consumer;
 import java.util.zip.ZipInputStream;
 import javax.swing.JOptionPane;
 import org.apache.commons.io.FileUtils;
-import org.apache.commons.io.IOUtils;
-
-/**
- *  Author: ItsLuke
- *
- * */
 
 public class Updater {
-    private final UpdaterApplication application;
-
+    private final VersionControlFetcher versionControlFetcher;
+    private final String version;
     private final int EOF = -1;
     private final int BUFFER_SIZE = 4096;
-    private String versionFile = "version.txt";
 
-    public Updater(UpdaterApplication application) {
-        this.application = application;
+    public Updater(VersionControlFetcher versionControlFetcher, String version) {
+        this.versionControlFetcher = versionControlFetcher;
+        this.version = version;
     }
 
-    public void update(String file) {
-        var connectionURL = "https://www.github.com/SheerSt/pokemon-wilds/releases/latest/download/" + file;
+    public CompletableFuture<Void> update(String file, Consumer<UpdateStatus> statusConsumer) {
+        return versionControlFetcher.fetchBinaries().thenAcceptAsync(content -> {
+            try (var inputStream = content.inputStream()) {
+                var fileSize = content.contentLength();
+                var tempFolder = Path.of("temp");
 
-        try {
-            var url = new URL(connectionURL);
-            try (var in = url.openStream()) {
-                var connection = url.openConnection();
-                connection.connect();
-                int fileSize = connection.getContentLength();
+                Files.createDirectories(tempFolder);
 
-                var tempFolder = new File("temp");
-                if(!tempFolder.exists())
-                    tempFolder.mkdir();
+                var downloadDir = Path.of(tempFolder + File.separator + file);
+                Files.createFile(downloadDir);
 
-                var downloadDir = new File("temp/" + file);
-                if(!downloadDir.exists()) {
-                    downloadDir.createNewFile();
-                }
-
-                copyInputStreamToFileNew(in, downloadDir, fileSize, file);
+                copyInputStreamToFileNew(inputStream, downloadDir, fileSize, file, statusConsumer);
             } catch (IOException e) {
                 e.printStackTrace();
             }
-        } catch (MalformedURLException e) {
-            e.printStackTrace();
-        }
+        });
     }
 
-    private void copyInputStreamToFileNew(InputStream source, File destination, int fileSize, String file) throws IOException {
-        try (var output = FileUtils.openOutputStream(destination)) {
+    private void copyInputStreamToFileNew(InputStream source, Path destination, long fileSize, String file, Consumer<UpdateStatus> statusConsumer) throws IOException {
+        try (var output = Files.newOutputStream(destination)) {
             try {
                 var buffer = new byte[BUFFER_SIZE];
                 var count = 0L;
@@ -70,52 +54,41 @@ public class Updater {
                     output.write(buffer, 0, n);
                     count += n;
                     var percentage = (int)(count * 100L / fileSize);
-                    application.message.setText("Downloading " + file + " @ " + percentage + "%");
-                    application.progress.setValue(percentage);
+                    statusConsumer.accept(new UpdateStatus("Downloading " + file + " @ " + percentage + "%", percentage));
                 }
 
-                unzip("temp/" + destination.getName(), "./");
+                unzip("temp/" + destination.getFileName(), "./", statusConsumer);
             } finally {
-                IOUtils.closeQuietly(output);
-
-                application.progress.setValue(33);
-                application.message.setText("Removing temp files...");
+                statusConsumer.accept(new UpdateStatus("Removing temp files...", 33));
                 FileUtils.deleteDirectory(new File("temp"));
-                application.message.setText("Moving files to correct directories...");
-                move("pokemon-wilds-v" + application.versionControl.getLatestVersion(), "./");
-                application.progress.setValue(66);
-                application.message.setText("Updating version file...");
+                statusConsumer.accept(new UpdateStatus("Moving files to correct directories...", 49));
+                move("pokemon-wilds-v" + version, "./", statusConsumer);
+                statusConsumer.accept(new UpdateStatus("Updating version file...", 66));
                 updateVersionFile();
-                application.progress.setValue(100);
-
-                application.message.setText("Update completed");
-                JOptionPane.showMessageDialog(null, "Game is now ready for use! Click to close updater", "Ready!", 1);
-                runGame();
+                statusConsumer.accept(new UpdateStatus("Update completed", 100));
+                JOptionPane.showMessageDialog(null, "Game is now ready for use!", "Ready!", JOptionPane.INFORMATION_MESSAGE);
             }
         }
     }
 
-    public void unzip(String zipPath, String dest) {
-        var destDir = new File(dest);
-        if(!destDir.exists()) destDir.mkdir();
+    private void unzip(String zipPath, String dest, Consumer<UpdateStatus> statusConsumer) throws IOException {
+        var destDir = Path.of(dest);
+        Files.createDirectories(destDir);
 
         try {
             var zipIn = new ZipInputStream(new FileInputStream(zipPath));
             var entry = zipIn.getNextEntry();
 
             while(entry != null) {
-                var path = dest + File.separator + entry.getName();
-                var parent = (new File(path)).getParentFile();
+                var path = Path.of(dest + File.separator + entry.getName());
+                var parent = path.getParent();
 
-                if(!parent.exists()) {
-                    parent.mkdirs();
-                }
+                Files.createDirectories(parent);
 
-                if(!entry.isDirectory()) {
-                    extract(zipIn, path, (int) entry.getSize());
+                if (!entry.isDirectory()) {
+                    extract(zipIn, path, (int) entry.getSize(), statusConsumer);
                 } else {
-                    File dir = new File(path);
-                    dir.mkdir();
+                    Files.createDirectories(path);
                 }
 
                 zipIn.closeEntry();
@@ -124,13 +97,13 @@ public class Updater {
 
             zipIn.close();
         } catch(Exception e) {
-            JOptionPane.showMessageDialog(null, "Failed to extract game data!\n" + e.getMessage(), "Extraction Failed!", 0);
+            JOptionPane.showMessageDialog(null, "Failed to extract game data!\n" + e.getMessage(), "Extraction Failed!", JOptionPane.ERROR_MESSAGE);
             e.printStackTrace();
         }
     }
 
-    void extract(ZipInputStream zipIn, String path, int fileSize) throws IOException {
-        try (var outputStream = new BufferedOutputStream(new FileOutputStream(path))) {
+    private void extract(ZipInputStream zipIn, Path path, int fileSize, Consumer<UpdateStatus> statusConsumer) throws IOException {
+        try (var outputStream = new BufferedOutputStream(Files.newOutputStream(path))) {
             var bytesIn = new byte[BUFFER_SIZE];
             var read = 0;
             var count = 0;
@@ -139,62 +112,72 @@ public class Updater {
                 outputStream.write(bytesIn, 0, read);
                 count += read;
                 int percentage = (int) (count * 100L / fileSize);
-                application.message.setText("Extracting " + path + " @ " + percentage + "%");
-                application.progress.setValue(percentage);
+                statusConsumer.accept(new UpdateStatus("Extracting " + path + " @ " + percentage + "%", percentage));
             }
         }
     }
 
-    private void move(String source, String destination) {
-        var destinationFolder = new File(destination);
-        var sourceFolder = new File(source);
+    private void move(String source, String destination, Consumer<UpdateStatus> statusConsumer) throws IOException {
+        var destinationFolder = Path.of(destination);
+        var sourceFolder = Path.of(source);
 
-        if (!destinationFolder.exists()) {
-            destinationFolder.mkdirs();
-        }
+        Files.createDirectories(destinationFolder);
 
-        if (!sourceFolder.exists() || !sourceFolder.isDirectory()) {
+        if (!Files.exists(sourceFolder) || !Files.isDirectory(sourceFolder)) {
             System.out.println(sourceFolder + "  Folder does not exists");
             return;
         }
 
-        var listOfFiles = sourceFolder.listFiles();
-        if (listOfFiles == null) {
+        try (var streamOfFiles = Files.list(sourceFolder)) {
+            var listOfFiles = streamOfFiles.toList();
+            var length = listOfFiles.size();
+            var currentIndex = 0;
+
+            for (var child : listOfFiles) {
+                // We can not overwrite the updater as it is currently in use
+                var fileName = child.getFileName().toString();
+                if (fileName.toLowerCase().matches("updater.jar")) {
+                    continue;
+                }
+
+                Files.move(child, Path.of(destinationFolder.toAbsolutePath().toString() + File.separatorChar + fileName));
+                var percentage = (currentIndex * 100) / length;
+                currentIndex++;
+                statusConsumer.accept(new UpdateStatus("Moving " + fileName + " @ " + percentage + "%", percentage));
+            }
+
+            Files.delete(sourceFolder);
+        }
+    }
+
+    public void runGame() throws IOException {
+        var executablePath = findPokeWildsExecutable();
+        if (executablePath == null) {
+            JOptionPane.showMessageDialog(null, "Unable to find game, please launch it manually", "Error", JOptionPane.ERROR_MESSAGE);
             return;
         }
 
-        var length = listOfFiles.length;
-        var currentIndex = 0;
+        var runtime = Runtime.getRuntime();
+        runtime.exec("java -jar " + executablePath);
 
-        for (var child : listOfFiles) {
-            // We can not overwrite the updater as it is currently in use
-            if(!child.getName().toLowerCase().matches("updater.jar")) {
-                child.renameTo(new File(destinationFolder + "\\" + child.getName()));
-                var percentage = (currentIndex * 100) / length;
-                currentIndex++;
-                application.message.setText("Moving " + child.getName() + " @ " + percentage + "%");
-                application.progress.setValue(percentage);
-            }
-        }
-
-        sourceFolder.delete();
+        UpdaterApplication.closeApplication();
     }
 
-    private void runGame() throws IOException {
-        var filePath = "./pokemon-wilds.jar"; //where your jar is located.
-        var runtime = Runtime.getRuntime();
-        runtime.exec(" java -jar " + filePath);
+    private Path findPokeWildsExecutable() {
+        var path = Path.of("pokemon-wilds.jar");
+        if (Files.exists(path)) {
+            return path.toAbsolutePath();
+        }
 
-        application.closeApplication();
+        var secondaryPath = Path.of("pokemon-wilds-v" + version + "-" + PlatformUtil.getPlatform().getName() + File.separator + "Contents" + File.separator + "Resources" + File.separator + "pokemon-wilds.jar");
+        if (Files.exists(secondaryPath)) {
+            return secondaryPath.toAbsolutePath();
+        }
+
+        return null;
     }
 
     private void updateVersionFile() throws IOException {
-        var toWrite = application.versionControl.getLatestVersion();
-
-        try(var in = new FileOutputStream(versionFile)) {
-            try(var writer = new BufferedWriter(new OutputStreamWriter(in))) {
-                writer.write(toWrite);
-            }
-        }
+        Files.writeString(Path.of("version.txt"), version);
     }
 }
